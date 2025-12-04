@@ -1,0 +1,10 @@
+streamlit
+python-dotenv
+langchain
+langchain-anthropic
+langchain-ollama
+langchain-community
+langchain-chroma
+pypdf
+chromadb
+pymupdf  # Optional: Better PDF support for image-based PDFs

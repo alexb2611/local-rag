@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(ollama ps:*)",
+      "Bash(ollama:*)",
+      "Bash(ldconfig:*)",
+      "Bash(nvcc:*)",
+      "Bash(journalctl:*)",
+      "Bash(systemctl status:*)",
+      "Bash(find:*)",
+      "Bash(rm:*)",
+      "Bash(mkdir:*)",
+      "Bash(chmod:*)",
+      "Bash(python3:*)",
+      "Bash(ldd:*)",
+      "Bash(git --version:*)",
+      "Bash(gh --version:*)",
+      "Bash(dir:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

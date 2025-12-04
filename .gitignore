@@ -1,0 +1,35 @@
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Database files
+chroma_db/
+chroma_db_timeseries/
+
+# IDE
+.vscode/
+*.code-workspace
+
+# Windows Zone.Identifier files
+*:Zone.Identifier
+
+# Debian packages
+*.deb
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
