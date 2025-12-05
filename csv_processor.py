@@ -45,7 +45,12 @@ def create_time_based_chunks(
     
     # Load CSV
     df = pd.read_csv(csv_path)
-    
+
+    # Check if CSV is empty (no data rows)
+    if df.empty:
+        print(f"Warning: CSV file '{csv_path}' is empty (no data rows)")
+        return []
+
     # Add full datetime column - combine date and time properly
     # The timestamp column is in HH:MM:SS format
     df['datetime'] = df['timestamp'].apply(lambda t: pd.to_datetime(f"{date_str} {t}"))
