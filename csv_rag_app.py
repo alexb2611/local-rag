@@ -3,6 +3,8 @@ import os
 import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
+import subprocess
+import json
 
 # LangChain imports - using modern approach (no deprecated imports)
 from langchain_chroma import Chroma
@@ -19,6 +21,31 @@ from csv_processor import create_time_based_chunks, load_multiple_csv_files, get
 # Load environment variables
 load_dotenv()
 
+# Function to get available Ollama models
+@st.cache_data(ttl=60)  # Cache for 60 seconds
+def get_ollama_models():
+    """Fetch list of installed Ollama models"""
+    try:
+        result = subprocess.run(
+            ['ollama', 'list'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')[1:]  # Skip header
+            models = []
+            for line in lines:
+                if line.strip():
+                    # Extract model name (first column)
+                    model_name = line.split()[0]
+                    models.append(model_name)
+            return models if models else ["No models found"]
+        else:
+            return ["Ollama not available"]
+    except Exception as e:
+        return [f"Error: {str(e)}"]
+
 # Configuration
 CHROMA_DB_PATH = "./chroma_db_timeseries"
 OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
@@ -30,14 +57,40 @@ st.markdown("Query your environmental monitoring data using natural language")
 # Sidebar for configuration
 with st.sidebar:
     st.header("⚙️ Configuration")
-    
-    # Model selection
-    model_choice = st.radio(
-        "Select LLM:",
-        ["Claude Sonnet 4", "Ollama (granite4:small-h)"],
-        help="Choose between cloud API (Claude) or local model (Ollama)"
+
+    # Provider selection
+    llm_provider = st.radio(
+        "Select LLM Provider:",
+        ["Claude (Anthropic)", "Ollama (Local)"],
+        help="Choose between cloud API (Claude) or local models (Ollama)"
     )
-    
+
+    # Model selection based on provider
+    if llm_provider == "Claude (Anthropic)":
+        model_choice = "Claude Sonnet 4"
+        selected_model = "claude-sonnet-4-20250514"
+    else:
+        # Get available Ollama models
+        available_models = get_ollama_models()
+
+        # Default selection
+        default_index = 0
+        if "granite4:small-h" in available_models:
+            default_index = available_models.index("granite4:small-h")
+
+        selected_model = st.selectbox(
+            "Select Ollama Model:",
+            available_models,
+            index=default_index,
+            help="Choose from your installed Ollama models"
+        )
+        model_choice = f"Ollama ({selected_model})"
+
+    # Display current model info
+    st.info(f"🤖 Active Model: **{selected_model}**")
+
+    st.divider()
+
     # Data loading mode
     data_mode = st.radio(
         "Data Loading Mode:",
@@ -107,21 +160,21 @@ with st.sidebar:
 
 # Initialize LLM based on selection
 @st.cache_resource
-def get_llm(model_choice):
+def get_llm(provider, model_name):
     """Initialize the selected LLM"""
-    if model_choice == "Claude Sonnet 4":
+    if provider == "Claude (Anthropic)":
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             st.error("ANTHROPIC_API_KEY not found in environment variables!")
             st.stop()
         return ChatAnthropic(
-            model="claude-sonnet-4-20250514",
+            model=model_name,
             anthropic_api_key=api_key,
             max_tokens=2000
         )
-    else:
+    else:  # Ollama
         return ChatOllama(
-            model="granite4:small-h",
+            model=model_name,
             base_url="http://127.0.0.1:11434"
         )
 
@@ -223,7 +276,7 @@ Answer:"""
 
 # Main app logic
 def main():
-    llm = get_llm(model_choice)
+    llm = get_llm(llm_provider, selected_model)
     
     # Data loading section
     if data_mode == "Upload Single CSV":
