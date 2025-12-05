@@ -1,0 +1,20 @@
+# Testing dependencies for Local RAG application
+
+# Core testing framework
+pytest>=7.4.0
+pytest-cov>=4.1.0           # Coverage reporting
+pytest-mock>=3.11.1         # Mocking utilities
+pytest-xdist>=3.3.1         # Parallel test execution
+
+# Time/date mocking
+freezegun>=1.2.2            # Mock datetime
+
+# Additional testing utilities
+pytest-timeout>=2.1.0       # Test timeout handling
+pytest-asyncio>=0.21.0      # Async test support
+
+# Streamlit testing (if needed for UI tests)
+# streamlit>=1.28.0         # Already in main requirements
+
+# Install main dependencies
+-r requirements.txt
