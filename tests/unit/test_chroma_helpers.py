@@ -71,17 +71,23 @@ class TestGetChromaClient:
         assert hasattr(client, 'list_collections')
         assert hasattr(client, 'get_or_create_collection')
 
-    def test_client_settings(self, tmp_path, monkeypatch):
-        """Test that client is created with correct settings"""
+    def test_client_persistence(self, tmp_path, monkeypatch):
+        """Test that client supports persistent storage"""
         from app import get_chroma_client
 
         test_dir = str(tmp_path / "test_chroma")
         monkeypatch.setattr('app.CHROMA_PERSIST_DIR', test_dir)
 
+        # Create client and collection
         client = get_chroma_client()
+        client.get_or_create_collection("persistence_test")
 
-        # Client should be persistent
-        assert hasattr(client, '_settings')
+        # Create new client instance
+        client2 = get_chroma_client()
+
+        # Should see the same collection (proves persistence works)
+        collections = [c.name for c in client2.list_collections()]
+        assert "persistence_test" in collections
 
     def test_works_with_existing_directory(self, tmp_path, monkeypatch):
         """Test that function works when directory already exists"""
