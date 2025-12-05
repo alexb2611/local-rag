@@ -33,3 +33,10 @@ chroma_db_timeseries/
 dist/
 build/
 *.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
