@@ -329,7 +329,7 @@ def main():
         if directory_path and st.button("🔄 Process Directory", type="primary"):
             if os.path.exists(directory_path):
                 with st.spinner("Processing multiple CSV files..."):
-                    documents = load_multiple_csv_files(directory_path, hours_per_chunk)
+                    documents = load_multiple_csv_files(directory_path, hours_per_chunk=hours_per_chunk)
                     
                     if documents:
                         st.success(f"✅ Created {len(documents)} chunks from directory")
@@ -337,7 +337,7 @@ def main():
                         # Show summary
                         summary = get_data_summary(documents)
                         st.subheader("📊 Data Summary")
-                        st.json(summary)
+                        st.text(summary)
                         
                         # Create vector store
                         with st.spinner("Creating vector store..."):
