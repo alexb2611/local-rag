@@ -5,6 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import subprocess
 import json
+import tempfile
 
 # LangChain imports - using modern approach (no deprecated imports)
 from langchain_chroma import Chroma
@@ -230,8 +231,8 @@ def create_rag_chain(vectorstore, llm):
     retriever = vectorstore.as_retriever(
         search_type="mmr",
         search_kwargs={
-            "k": 15,          # Number of chunks to retrieve
-            "fetch_k": 30     # Number of candidates for MMR
+            "k": 50,          # Number of chunks to retrieve (increased for better coverage)
+            "fetch_k": 100    # Number of candidates for MMR
         }
     )
     
@@ -292,8 +293,9 @@ def main():
         )
         
         if uploaded_file is not None:
-            # Save uploaded file temporarily
-            temp_path = f"/tmp/{uploaded_file.name}"
+            # Save uploaded file temporarily (cross-platform)
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, uploaded_file.name)
             with open(temp_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             
@@ -329,7 +331,7 @@ def main():
         if directory_path and st.button("🔄 Process Directory", type="primary"):
             if os.path.exists(directory_path):
                 with st.spinner("Processing multiple CSV files..."):
-                    documents = load_multiple_csv_files(directory_path, hours_per_chunk)
+                    documents = load_multiple_csv_files(directory_path, hours_per_chunk=hours_per_chunk)
                     
                     if documents:
                         st.success(f"✅ Created {len(documents)} chunks from directory")
@@ -337,7 +339,7 @@ def main():
                         # Show summary
                         summary = get_data_summary(documents)
                         st.subheader("📊 Data Summary")
-                        st.json(summary)
+                        st.text(summary)
                         
                         # Create vector store
                         with st.spinner("Creating vector store..."):
@@ -399,31 +401,46 @@ def main():
         if 'query_counter' not in st.session_state:
             st.session_state['query_counter'] = 0
         
-        # Query input - key changes after each submission to force reset
-        query = st.text_input(
-            "Enter your question:",
-            placeholder="What was the temperature trend during the morning?",
-            key=f"query_input_{st.session_state['query_counter']}",
-            label_visibility="visible"
-        )
+        # Initialize processing flag
+        if 'processing_query' not in st.session_state:
+            st.session_state['processing_query'] = False
         
-        # Submit button
-        submit_button = st.button("Ask Question", type="primary")
-        
-        if submit_button and query:
-            with st.spinner("Analyzing data..."):
-                # Get answer and source docs
-                answer = chain.invoke(query)
-                docs = retriever.invoke(query)
+        # Only show input form if not currently processing
+        if not st.session_state['processing_query']:
+            # Query input - key changes after each submission to force reset
+            query = st.text_input(
+                "Enter your question:",
+                placeholder="What was the temperature trend during the morning?",
+                key=f"query_input_{st.session_state['query_counter']}",
+                label_visibility="visible"
+            )
+            
+            # Submit button
+            submit_button = st.button("Ask Question", type="primary")
+            
+            if submit_button and query:
+                # Set processing flag to hide this section during rerun
+                st.session_state['processing_query'] = True
                 
-                # Add to conversation history
-                st.session_state['conversation_history'].append((query, answer, docs))
-                
-                # Increment counter to create new widget with fresh key
-                st.session_state['query_counter'] += 1
-                
-                # Rerun to show updated history
-                st.rerun()
+                with st.spinner("Analyzing data..."):
+                    # Get answer and source docs
+                    answer = chain.invoke(query)
+                    docs = retriever.invoke(query)
+                    
+                    # Add to conversation history
+                    st.session_state['conversation_history'].append((query, answer, docs))
+                    
+                    # Increment counter to create new widget with fresh key
+                    st.session_state['query_counter'] += 1
+                    
+                    # Clear processing flag
+                    st.session_state['processing_query'] = False
+                    
+                    # Rerun to show updated history
+                    st.rerun()
+        else:
+            # Show processing message if flag is set
+            st.info("Processing your question...")
 
 if __name__ == "__main__":
     main()
