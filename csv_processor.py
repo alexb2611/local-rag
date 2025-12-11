@@ -13,7 +13,7 @@ import warnings
 
 # Try to import LangChain Document for compatibility
 try:
-    from langchain.schema import Document
+    from langchain_core.documents import Document
     LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
@@ -24,12 +24,16 @@ warnings.filterwarnings('ignore')
 
 def read_mixed_format_csv(csv_path: str) -> Optional[pd.DataFrame]:
     """
-    Read CSV file handling both standard and solar formats with robust error handling.
+    Read CSV file handling multiple sensor formats with robust error handling.
+    Automatically extracts date from filename and combines with time-only timestamps.
     
     Standard format (8 fields):
         timestamp, temperature, humidity, pressure, battery, power_source, rssi, snr
     
-    Solar format (11 fields):
+    Solar format without uptime (9 fields):
+        timestamp, temperature, humidity, pressure, battery, charging, interval, rssi, snr
+    
+    Full solar format (11 fields):
         timestamp, temperature, humidity, pressure, battery, charging, interval, 
         uptime, power_source, rssi, snr
     
@@ -37,8 +41,11 @@ def read_mixed_format_csv(csv_path: str) -> Optional[pd.DataFrame]:
         csv_path: Path to the CSV file
         
     Returns:
-        DataFrame with normalized columns, or None if file cannot be read
+        DataFrame with normalized columns and proper datetime timestamps, or None if file cannot be read
     """
+    # Extract date from filename (e.g., lora_data_2025-12-02.csv)
+    file_date = extract_date_from_filename(csv_path)
+    
     try:
         # First attempt: normal pandas read with error skipping
         df = pd.read_csv(csv_path, on_bad_lines='skip')
@@ -46,12 +53,22 @@ def read_mixed_format_csv(csv_path: str) -> Optional[pd.DataFrame]:
         if df is not None and not df.empty:
             # Normalize column names and add missing columns with defaults
             df = normalize_csv_columns(df)
+            
+            # Combine filename date with time-only timestamps
+            df = combine_date_and_time(df, file_date)
+            
             return df
             
     except pd.errors.ParserError:
         # Fallback: line-by-line parsing for mixed format files
         print(f"⚠️  Mixed format detected in {csv_path}, using robust parsing...")
-        return parse_mixed_format_line_by_line(csv_path)
+        df = parse_mixed_format_line_by_line(csv_path)
+        
+        if df is not None:
+            # Combine filename date with time-only timestamps
+            df = combine_date_and_time(df, file_date)
+        
+        return df
         
     except Exception as e:
         print(f"❌ Error reading {csv_path}: {e}")
@@ -60,13 +77,13 @@ def read_mixed_format_csv(csv_path: str) -> Optional[pd.DataFrame]:
 
 def normalize_csv_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add missing columns with default values for backward compatibility.
+    Add missing columns with default values and normalize charging values for consistency.
     
     Args:
         df: Input DataFrame
         
     Returns:
-        DataFrame with all expected columns
+        DataFrame with all expected columns and normalized values
     """
     # Core sensor columns (should always exist)
     required_columns = ['timestamp', 'temperature', 'humidity', 'pressure', 'battery']
@@ -78,7 +95,11 @@ def normalize_csv_columns(df: pd.DataFrame) -> pd.DataFrame:
     
     # Optional columns with defaults
     if 'power_source' not in df.columns:
-        df['power_source'] = 'Unknown'
+        # If we have charging info, assume Solar, otherwise Unknown
+        if 'charging' in df.columns:
+            df['power_source'] = 'Solar'
+        else:
+            df['power_source'] = 'Unknown'
     
     if 'rssi' not in df.columns:
         df['rssi'] = 0
@@ -89,6 +110,11 @@ def normalize_csv_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Solar-specific columns
     if 'charging' not in df.columns:
         df['charging'] = 'N'
+    else:
+        # Normalize charging values: convert 1/0 or various text formats to Y/N
+        df['charging'] = df['charging'].apply(
+            lambda x: 'Y' if str(x).strip() in ['1', 'Y', 'y', 'yes', 'Yes', 'YES', 'True', 'true'] else 'N'
+        )
         
     if 'interval' not in df.columns:
         df['interval'] = 0
@@ -145,7 +171,17 @@ def parse_mixed_format_line_by_line(csv_path: str) -> Optional[pd.DataFrame]:
                     row_dict['interval'] = 0
                     row_dict['uptime'] = 0
                     
-                elif len(fields) >= 11:  # Solar format
+                elif len(fields) == 9:  # Solar format without uptime (charging, interval, rssi, snr)
+                    # Format: timestamp,temperature,humidity,pressure,battery,charging,interval,rssi,snr
+                    row_dict['charging'] = 'Y' if fields[5].strip() in ['1', 'Y', 'y', 'yes', 'Yes'] else 'N'
+                    row_dict['interval'] = int(fields[6]) if fields[6].strip() else 0
+                    row_dict['rssi'] = int(fields[7])
+                    row_dict['snr'] = float(fields[8])
+                    # Add missing columns with defaults
+                    row_dict['power_source'] = 'Solar'
+                    row_dict['uptime'] = 0
+                    
+                elif len(fields) >= 11:  # Full solar format with uptime
                     row_dict['charging'] = fields[5]
                     row_dict['interval'] = int(fields[6]) if fields[6] else 0
                     row_dict['uptime'] = int(fields[7]) if fields[7] else 0
@@ -183,6 +219,48 @@ def parse_mixed_format_line_by_line(csv_path: str) -> Optional[pd.DataFrame]:
     except Exception as e:
         print(f"❌ Failed to parse {csv_path} with robust method: {e}")
         return None
+
+
+def extract_date_from_filename(filepath: str) -> Optional[str]:
+    """
+    Extract date from filename in format: lora_data_YYYY-MM-DD.csv
+    
+    Args:
+        filepath: Path to CSV file
+        
+    Returns:
+        Date string in YYYY-MM-DD format, or None if not found
+    """
+    import re
+    filename = os.path.basename(filepath)
+    # Pattern: lora_data_2025-12-02.csv
+    match = re.search(r'(\d{4})-(\d{2})-(\d{2})', filename)
+    if match:
+        return match.group(0)  # Returns YYYY-MM-DD
+    return None
+
+
+def combine_date_and_time(df: pd.DataFrame, date_str: Optional[str]) -> pd.DataFrame:
+    """
+    Combine date from filename with time-only timestamps in DataFrame.
+    
+    Args:
+        df: DataFrame with 'timestamp' column containing time-only strings (HH:MM:SS)
+        date_str: Date string in YYYY-MM-DD format from filename
+        
+    Returns:
+        DataFrame with 'timestamp' column as proper datetime objects
+    """
+    if date_str is None:
+        # Fallback to parsing as time-only (will use 1900-01-01 as date)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='%H:%M:%S', errors='coerce')
+    else:
+        # Combine date with time
+        # Create datetime strings like "2025-12-02 12:34:56"
+        df['timestamp'] = date_str + ' ' + df['timestamp'].astype(str)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+    
+    return df
 
 
 def detect_solar_data(df: pd.DataFrame) -> Tuple[bool, Dict]:
@@ -229,9 +307,12 @@ def chunk_csv_data(df: pd.DataFrame, hours_per_chunk: int = 24) -> List[pd.DataF
     if df.empty:
         return []
     
-    # Convert timestamp to datetime if not already
+    # Timestamps should already be datetime objects from read_mixed_format_csv
+    # Just verify they are datetime type
     if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
-        df['timestamp'] = pd.to_datetime(df['timestamp'], format='%H:%M:%S', errors='coerce')
+        print("⚠️  Warning: timestamp column is not datetime type, attempting conversion")
+        # Try generic conversion (will preserve date if already combined)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
     
     # Remove any rows with invalid timestamps
     df = df.dropna(subset=['timestamp'])
@@ -350,15 +431,24 @@ def generate_chunk_description(group: pd.DataFrame) -> str:
     time_start = group['timestamp'].iloc[0]
     time_end = group['timestamp'].iloc[-1]
     
-    # Format timestamps
+    # Format timestamps with FULL date and time
     if isinstance(time_start, pd.Timestamp):
-        time_start_str = time_start.strftime('%H:%M:%S')
-        time_end_str = time_end.strftime('%H:%M:%S')
+        # Include full date: "2025-08-15 12:30:00"
+        time_start_str = time_start.strftime('%Y-%m-%d %H:%M:%S')
+        time_end_str = time_end.strftime('%Y-%m-%d %H:%M:%S')
+        # Extract just the date for display
+        date_str = time_start.strftime('%Y-%m-%d')
+        # Extract month name for easy reference
+        month_name = time_start.strftime('%B %Y')  # e.g., "August 2025"
     else:
         time_start_str = str(time_start)
         time_end_str = str(time_end)
+        date_str = "Unknown date"
+        month_name = "Unknown month"
     
     description.append(f"=== TEMPORAL INFO ===")
+    description.append(f"Date: {date_str}")
+    description.append(f"Month: {month_name}")
     description.append(f"Time Period: {time_start_str} to {time_end_str}")
     description.append(f"Number of Readings: {len(group)}")
     description.append("")
@@ -573,21 +663,41 @@ def chunks_to_documents(chunks: List[Dict]) -> List:
         
         # Build metadata
         metadata = {
-            'chunk_id': chunk.get('chunk_id', 'unknown'),
-            'source_file': chunk.get('source_file', 'unknown'),
+            'chunk_id': int(chunk.get('chunk_id', 0)),  # Ensure int
+            'source_file': str(chunk.get('source_file', 'unknown')),  # Ensure str
         }
         
         # Add statistics to metadata (flatten for easier access)
         stats = chunk.get('statistics', {})
         if stats:
+            # Convert timestamps to strings (Chroma doesn't accept Timestamp objects)
+            time_start = stats.get('time_start', '')
+            time_end = stats.get('time_end', '')
+            
+            # Convert pandas Timestamps to strings
+            if hasattr(time_start, 'strftime'):
+                time_start_str = time_start.strftime('%Y-%m-%d %H:%M:%S')
+                date_str = time_start.strftime('%Y-%m-%d')  # Extract date
+            else:
+                time_start_str = str(time_start)
+                date_str = 'Unknown'
+                
+            if hasattr(time_end, 'strftime'):
+                time_end_str = time_end.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                time_end_str = str(time_end)
+            
             metadata.update({
-                'time_start': stats.get('time_start', ''),
-                'time_end': stats.get('time_end', ''),
-                'reading_count': stats.get('reading_count', 0),
-                'temperature_mean': stats.get('temperature_mean', 0),
-                'humidity_mean': stats.get('humidity_mean', 0),
-                'pressure_mean': stats.get('pressure_mean', 0),
-                'battery_mean': stats.get('battery_mean', 0),
+                'time_start': time_start_str,
+                'time_end': time_end_str,
+                'start_time': time_start_str,  # Alias for app compatibility
+                'end_time': time_end_str,      # Alias for app compatibility
+                'date': date_str,              # NEW: Extract date for display
+                'reading_count': int(stats.get('reading_count', 0)),
+                'temperature_mean': float(stats.get('temperature_mean', 0)),
+                'humidity_mean': float(stats.get('humidity_mean', 0)),
+                'pressure_mean': float(stats.get('pressure_mean', 0)),
+                'battery_mean': float(stats.get('battery_mean', 0)),
             })
         
         # Create Document object
@@ -631,24 +741,80 @@ def debug_chunk_structure(chunks, max_items: int = 2):
 
 
 # Backward compatibility wrappers for existing code
-def create_time_based_chunks(df: pd.DataFrame, hours_per_chunk: int = 24) -> List[pd.DataFrame]:
+def create_time_based_chunks(df_or_path, hours_per_chunk: int = 24):
     """
-    Backward compatibility wrapper for chunk_csv_data().
+    Create time-based chunks and convert to LangChain Documents.
+    
+    This is the main entry point for csv_rag_app.py. It handles the full pipeline:
+    1. Read CSV file (if filepath provided)
+    2. Chunk data by time periods
+    3. Generate descriptions and statistics
+    4. Convert to LangChain Document objects
     
     Args:
-        df: Input DataFrame with timestamp column
-        hours_per_chunk: Hours of data per chunk
+        df_or_path: Either a pandas DataFrame OR a filepath string to CSV file
+        hours_per_chunk: Hours of data per chunk (default 24 for daily)
         
     Returns:
-        List of DataFrame chunks
+        List of LangChain Document objects with page_content and metadata
     """
-    return chunk_csv_data(df, hours_per_chunk)
+    # Handle both DataFrame and filepath inputs
+    if isinstance(df_or_path, str):
+        # It's a filepath - use process_csv_file for full pipeline
+        print(f"📖 Reading CSV file: {df_or_path}")
+        chunk_dicts = process_csv_file(df_or_path, hours_per_chunk)
+        
+        if not chunk_dicts:
+            print("⚠️  No chunks created from file")
+            return []
+        
+        # Convert to LangChain Documents
+        if LANGCHAIN_AVAILABLE:
+            documents = chunks_to_documents(chunk_dicts)
+            print(f"✅ Created {len(documents)} LangChain Documents")
+            return documents
+        else:
+            print("⚠️  LangChain not available, returning chunk dictionaries")
+            return chunk_dicts
+            
+    elif isinstance(df_or_path, pd.DataFrame):
+        # It's already a DataFrame - do the conversion manually
+        df = df_or_path
+        
+        # Chunk the data
+        dataframe_chunks = chunk_csv_data(df, hours_per_chunk)
+        
+        if not dataframe_chunks:
+            return []
+        
+        # Convert DataFrame chunks to dictionaries with descriptions
+        chunk_dicts = []
+        for i, chunk in enumerate(dataframe_chunks):
+            description = generate_chunk_description(chunk)
+            stats = calculate_statistics(chunk)
+            
+            chunk_dicts.append({
+                'chunk_id': i,
+                'source_file': 'dataframe_input',
+                'description': description,
+                'statistics': stats,
+                'raw_data': chunk
+            })
+        
+        # Convert to LangChain Documents
+        if LANGCHAIN_AVAILABLE:
+            documents = chunks_to_documents(chunk_dicts)
+            return documents
+        else:
+            return chunk_dicts
+            
+    else:
+        raise TypeError(f"Expected DataFrame or filepath string, got {type(df_or_path)}")
 
 
 def load_multiple_csv_files(directory_path: str, hours_per_chunk: int = 24, 
-                           return_documents: bool = True) -> Tuple[List, str]:
+                           return_documents: bool = True) -> List:
     """
-    Backward compatibility wrapper for process_multiple_csv_files().
     Load and process all CSV files matching lora_data_*.csv pattern from a directory.
     
     Args:
@@ -657,14 +823,21 @@ def load_multiple_csv_files(directory_path: str, hours_per_chunk: int = 24,
         return_documents: If True, return LangChain Document objects; if False, return raw dicts
         
     Returns:
-        Tuple of (list of processed chunks or Documents, summary string)
+        List of LangChain Document objects (or raw dicts if return_documents=False)
+        
+    Note:
+        This function is now consistent with create_time_based_chunks() - returns just the list.
+        For summary information, use get_data_summary() on the returned documents.
     """
     # Find all CSV files matching the pattern
     pattern = os.path.join(directory_path, "lora_data_*.csv")
     file_paths = sorted(glob.glob(pattern))
     
     if not file_paths:
-        return [], f"No CSV files found matching pattern: {pattern}"
+        print(f"⚠️  No CSV files found matching pattern: {pattern}")
+        return []
+    
+    print(f"📂 Found {len(file_paths)} CSV files in directory")
     
     # Process all files
     all_chunks = process_multiple_csv_files(file_paths, hours_per_chunk)
@@ -673,7 +846,7 @@ def load_multiple_csv_files(directory_path: str, hours_per_chunk: int = 24,
     if return_documents and LANGCHAIN_AVAILABLE:
         try:
             result = chunks_to_documents(all_chunks)
-            print(f"✅ Converted {len(all_chunks)} chunks to LangChain Documents")
+            print(f"✅ Converted {len(all_chunks)} chunks to {len(result)} LangChain Documents")
         except Exception as e:
             print(f"⚠️ Failed to convert to Documents: {e}")
             print(f"   Returning raw chunks instead")
@@ -681,19 +854,7 @@ def load_multiple_csv_files(directory_path: str, hours_per_chunk: int = 24,
     else:
         result = all_chunks
     
-    # Generate summary
-    summary = f"Processed {len(file_paths)} CSV files\n"
-    summary += f"Created {len(all_chunks)} chunks\n"
-    
-    if all_chunks:
-        # Count solar vs standard data
-        solar_chunks = sum(1 for chunk in all_chunks 
-                          if isinstance(chunk, dict) and 
-                          detect_solar_data(chunk.get('raw_data', pd.DataFrame()))[0])
-        summary += f"Solar-enhanced chunks: {solar_chunks}\n"
-        summary += f"Standard chunks: {len(all_chunks) - solar_chunks}\n"
-    
-    return result, summary
+    return result
 
 
 def get_data_summary(chunks) -> str:
